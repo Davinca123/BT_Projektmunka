@@ -1,0 +1,12 @@
+# STM32CubeIDE / Eclipse specific files
+.cproject
+.project
+.settings/
+*.launch
+Debug/
+Release/
+build/
+
+# OS specific files
+.DS_Store
+Thumbs.db
