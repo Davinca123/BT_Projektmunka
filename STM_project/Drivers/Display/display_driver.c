@@ -21,15 +21,14 @@
 
 // 1024-byte framebuffer (8 pages x 128 columns)
 static uint8_t framebuffer[GME12864_BUF_SIZE];
-static uint8_t i2c_data[GME12864_BUF_SIZE+1];
 
 
 
 static int ssd1306_write_cmd(uint8_t cmd) {
-    uint8_t i2c_data[2];
-    i2c_data[0] = CTRL_BYTE_CMD;
-    i2c_data[1] = cmd;
-    return port_i2c_transmit(GME12864_I2C_ADDR, i2c_data, 2, 1000);
+//    uint8_t i2c_data[2];
+//    i2c_data[0] = CTRL_BYTE_CMD;
+//    i2c_data[1] = cmd;
+    return port_i2c_transmit(GME12864_I2C_ADDR, CTRL_BYTE_CMD, 1, &cmd, 1, 1000);
 }
 
 
@@ -127,8 +126,8 @@ e_disp_return gme12864_update(void) {
 
     // Send the entire 1024-byte buffer in one burst
 
-    i2c_data[0] = CTRL_BYTE_DATA;
-    memcpy(&i2c_data[1], framebuffer, GME12864_BUF_SIZE);
-    port_i2c_transmit(GME12864_I2C_ADDR, i2c_data, GME12864_BUF_SIZE+1, 1000);
+//    i2c_data[0] = CTRL_BYTE_DATA;
+//    memcpy(&i2c_data[1], framebuffer, GME12864_BUF_SIZE);
+    port_i2c_transmit(GME12864_I2C_ADDR, CTRL_BYTE_DATA, 1, framebuffer, GME12864_BUF_SIZE, 1000);
     return err == 0 ? DISP_OK : DISP_COMM_ERROR;
 }

@@ -94,9 +94,9 @@ void StartDisplayTask(void *argument);
 /*******************************************************************************
  ********************** PLATFORM SPECIFIC PORT FUNCTIONS ***********************
  ******************************************************************************/
-int port_i2c_transmit(uint16_t addr, uint8_t* pdata, uint16_t size, uint32_t timeout)
+int port_i2c_transmit(uint16_t dev_addr, uint16_t mem_addr, uint16_t mem_addr_size, uint8_t* pdata, uint16_t size, uint32_t timeout)
 {
-  return HAL_I2C_Master_Transmit(&hi2c1, addr, pdata, size, timeout);
+  return HAL_I2C_Mem_Write(&hi2c1, dev_addr, mem_addr, mem_addr_size, pdata, size, timeout);
 }
 
 void port_time_delay(uint32_t delay_ms)
@@ -139,7 +139,7 @@ int main(void)
   MX_TIM6_Init();
   MX_I2C1_Init();
   /* USER CODE BEGIN 2 */
-
+  HAL_TIM_Base_Start_IT(&htim6);
   /* USER CODE END 2 */
 
   /* Init scheduler */
