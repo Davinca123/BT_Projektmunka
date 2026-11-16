@@ -8,6 +8,11 @@
 #ifndef INC_DISPLAY_H_
 #define INC_DISPLAY_H_
 
+#include <stdint.h>
+
+#define GME12864_WIDTH 128
+#define GME12864_HEIGHT 64
+
 /*
  * @brief Return codes for the display driver
  */

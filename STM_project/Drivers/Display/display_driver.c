@@ -6,15 +6,13 @@
  */
 
 
+#include <display_driver.h>
 #include <stdint.h>
 #include <string.h>
-#include "display.h"
 #include "port_i2c.h"
 #include "port_time.h"
 
 #define GME12864_I2C_ADDR 0x78 // Default 7-bit I2C address (0x3C) shifted to the left
-#define GME12864_WIDTH 128
-#define GME12864_HEIGHT 64
 #define GME12864_BUF_SIZE (GME12864_WIDTH * GME12864_HEIGHT / 8) // 1024 bytes
 
 // Control bytes for SSD1306 I2C communication
@@ -23,7 +21,7 @@
 
 // 1024-byte framebuffer (8 pages x 128 columns)
 static uint8_t framebuffer[GME12864_BUF_SIZE];
-
+static uint8_t i2c_data[GME12864_BUF_SIZE+1];
 
 
 
@@ -31,7 +29,7 @@ static int ssd1306_write_cmd(uint8_t cmd) {
     uint8_t i2c_data[2];
     i2c_data[0] = CTRL_BYTE_CMD;
     i2c_data[1] = cmd;
-    return port_i2c_transmit(GME12864_I2C_ADDR, i2c_data, 2, 100);
+    return port_i2c_transmit(GME12864_I2C_ADDR, i2c_data, 2, 1000);
 }
 
 
@@ -129,9 +127,8 @@ e_disp_return gme12864_update(void) {
 
     // Send the entire 1024-byte buffer in one burst
 
-    uint8_t i2c_data[GME12864_BUF_SIZE+1];
     i2c_data[0] = CTRL_BYTE_DATA;
     memcpy(&i2c_data[1], framebuffer, GME12864_BUF_SIZE);
-    port_i2c_transmit(GME12864_I2C_ADDR, i2c_data, GME12864_BUF_SIZE+1, 100);
+    port_i2c_transmit(GME12864_I2C_ADDR, i2c_data, GME12864_BUF_SIZE+1, 1000);
     return err == 0 ? DISP_OK : DISP_COMM_ERROR;
 }

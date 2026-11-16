@@ -22,7 +22,10 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-#include "display.h"
+#include <stdio.h>
+#include "display_driver.h"
+#include "display_module.h"
+#include "ugui.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -65,7 +68,7 @@ const osThreadAttr_t MeasureManagerT_attributes = {
 osThreadId_t DisplayTaskHandle;
 const osThreadAttr_t DisplayTask_attributes = {
   .name = "DisplayTask",
-  .stack_size = 128 * 4,
+  .stack_size = 256 * 4,
   .priority = (osPriority_t) osPriorityBelowNormal,
 };
 /* USER CODE BEGIN PV */
@@ -88,6 +91,9 @@ void StartDisplayTask(void *argument);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+/*******************************************************************************
+ ********************** PLATFORM SPECIFIC PORT FUNCTIONS ***********************
+ ******************************************************************************/
 int port_i2c_transmit(uint16_t addr, uint8_t* pdata, uint16_t size, uint32_t timeout)
 {
   return HAL_I2C_Master_Transmit(&hi2c1, addr, pdata, size, timeout);
@@ -97,6 +103,7 @@ void port_time_delay(uint32_t delay_ms)
 {
   HAL_Delay(delay_ms);
 }
+
 /* USER CODE END 0 */
 
 /**
@@ -449,12 +456,14 @@ void StartDisplayTask(void *argument)
   /* USER CODE BEGIN StartDisplayTask */
 
   gme12864_init();
-//  gme12864_draw_pixel(60,60,1);
-//  gme12864_update();
+  display_graphics_init();
+  uint32_t step_counter = 34567;
   /* Infinite loop */
   for(;;)
   {
-    osDelay(1);
+    render_step_counter_frame(step_counter);
+    ++step_counter;
+    osDelay(100);
   }
   /* USER CODE END StartDisplayTask */
 }
