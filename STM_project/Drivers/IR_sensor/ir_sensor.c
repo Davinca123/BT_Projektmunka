@@ -8,6 +8,7 @@
 #include <stdbool.h>
 #include <stdlib.h>
 #include "port_i2c.h"
+#include "ir_sensor.h"
 
 // MAX30100 I2C address and registers
 #define MAX30100_ADDR       (0x57 << 1) // 7-bit address shifted to the left
@@ -49,25 +50,36 @@ void init_ir_sensor()
 
 
 
-void read_ir_sensor(uint16_t* ir_raw, uint8_t* is_finger_on)
+int read_ir_sensor(uint16_t* ir_raw, uint8_t* is_finger_on, uint8_t max_samples, uint8_t* num_samples)
 {
-  uint8_t max_buf[4];
+  static uint8_t max_buf[IR_FIFO_DEPTH * 4]; // static: keep it off the (small) task stack
+  uint8_t ptr_buf[3];                        // FIFO_WR_PTR, OVF_COUNTER, FIFO_RD_PTR (consecutive registers)
+  int ret;
 
-  // Reading 4 bytes from the FIFO data (bytes 3 and 4 are always 0, as the red LED is turned off)
-  if (port_i2c_receive(MAX30100_ADDR, MAX_REG_FIFO_DATA, 1, max_buf, 4, 100)
-      == 0)
+  *num_samples = 0;
+
+  // Check how many samples are waiting in the FIFO
+  ret = port_i2c_receive(MAX30100_ADDR, MAX_REG_FIFO_WR_PTR, 1, ptr_buf, 3, 100);
+  if (ret != 0) return ret;
+
+  uint8_t count = (uint8_t) ((ptr_buf[0] - ptr_buf[2]) & 0x0F);
+  if ((count == 0) && (ptr_buf[1] != 0)) count = IR_FIFO_DEPTH; // WR == RD with overflow -> FIFO is full
+  if (count > max_samples) count = max_samples;
+  if (count == 0) return 0; // No new sample yet
+
+  // Burst reading 4 bytes per sample from the FIFO data (bytes 3 and 4 are always 0, as the red LED is turned off)
+  ret = port_i2c_receive(MAX30100_ADDR, MAX_REG_FIFO_DATA, 1, max_buf, (uint16_t) (count * 4), 100);
+  if (ret != 0) return ret;
+
+  for (uint8_t i = 0; i < count; i++)
   {
     // Combining the 1st and 2nd bytes
-    *ir_raw = (uint16_t) ((max_buf[0] << 8) | max_buf[1]);
+    ir_raw[i] = (uint16_t) ((max_buf[i * 4] << 8) | max_buf[i * 4 + 1]);
+
+    // Finger detection
+    is_finger_on[i] = (ir_raw[i] > IR_REFLECTION_THRESHOLD) ? 1 : 0;
   }
 
-  // Finger detection
-  if (*ir_raw > IR_REFLECTION_THRESHOLD)
-  {
-    *is_finger_on = 1;
-  }
-  else
-  {
-    *is_finger_on = 0;
-  }
+  *num_samples = count;
+  return 0;
 }

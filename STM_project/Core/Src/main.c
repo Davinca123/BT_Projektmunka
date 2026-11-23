@@ -76,6 +76,11 @@ const osThreadAttr_t DisplayTask_attributes = {
   .stack_size = 256 * 4,
   .priority = (osPriority_t) osPriorityBelowNormal,
 };
+/* Definitions for mutexI2c */
+osMutexId_t mutexI2cHandle;
+const osMutexAttr_t mutexI2c_attributes = {
+  .name = "mutexI2c"
+};
 /* USER CODE BEGIN PV */
 
 volatile uint8_t step_counting_flag = 0;
@@ -104,12 +109,20 @@ void StartDisplayTask(void *argument);
  ******************************************************************************/
 int port_i2c_transmit(uint16_t dev_addr, uint16_t mem_addr, uint16_t mem_addr_size, uint8_t* pdata, uint16_t size, uint32_t timeout)
 {
-  return HAL_I2C_Mem_Write(&hi2c1, dev_addr, mem_addr, mem_addr_size, pdata, size, timeout);
+  // I2C1 is shared between tasks (display, accelerometer, IR sensor) -> serialize access
+  if (osMutexAcquire(mutexI2cHandle, osWaitForever) != osOK) return HAL_BUSY;
+  int ret = HAL_I2C_Mem_Write(&hi2c1, dev_addr, mem_addr, mem_addr_size, pdata, size, timeout);
+  osMutexRelease(mutexI2cHandle);
+  return ret;
 }
 
 int port_i2c_receive(uint16_t dev_addr, uint16_t mem_addr, uint16_t mem_addr_size, uint8_t* pdata, uint16_t size, uint32_t timeout)
 {
-  return HAL_I2C_Mem_Read(&hi2c1, dev_addr, mem_addr, mem_addr_size, pdata, size, timeout);
+  // I2C1 is shared between tasks (display, accelerometer, IR sensor) -> serialize access
+  if (osMutexAcquire(mutexI2cHandle, osWaitForever) != osOK) return HAL_BUSY;
+  int ret = HAL_I2C_Mem_Read(&hi2c1, dev_addr, mem_addr, mem_addr_size, pdata, size, timeout);
+  osMutexRelease(mutexI2cHandle);
+  return ret;
 }
 
 void port_time_delay(uint32_t delay_ms)
@@ -164,6 +177,9 @@ int main(void)
 
   /* Init scheduler */
   osKernelInitialize();
+  /* Create the mutex(es) */
+  /* creation of mutexI2c */
+  mutexI2cHandle = osMutexNew(&mutexI2c_attributes);
 
   /* USER CODE BEGIN RTOS_MUTEX */
   /* add mutexes, ... */
@@ -280,7 +296,7 @@ static void MX_I2C1_Init(void)
 
   /* USER CODE END I2C1_Init 1 */
   hi2c1.Instance = I2C1;
-  hi2c1.Init.Timing = 0x10D19CE4;
+  hi2c1.Init.Timing = 0x00F12981;
   hi2c1.Init.OwnAddress1 = 0;
   hi2c1.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
   hi2c1.Init.DualAddressMode = I2C_DUALADDRESS_DISABLE;

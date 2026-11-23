@@ -8,7 +8,6 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdlib.h>
-#include "port_time.h"
 #include "pulse_meter.h"
 #include "ir_sensor.h"
 
@@ -25,6 +24,7 @@ void init_pulse_meter(s_pulse_meter_handle_t* hnd)
   hnd->ready_for_beat = 1;
   hnd->beat_cooldown = 0;    // Idle time between heartbeats
   hnd->last_beat_time = 0;  // Last heartbeat time
+  hnd->sample_count = 0;     // Sample counter time base
   hnd->bpm = 0;              // Pulse in BPM
 }
 
@@ -36,14 +36,11 @@ uint8_t get_bpm(s_pulse_meter_handle_t* hnd)
 }
 
 
-void calc_bpm(s_pulse_meter_handle_t* hnd)
+static void process_ir_sample(s_pulse_meter_handle_t* hnd, uint16_t ir_raw, uint8_t is_finger_on)
 {
-  if (hnd == NULL) return;
-
-  uint16_t ir_raw = 0;
-  uint8_t is_finger_on;
-  read_ir_sensor(&ir_raw, &is_finger_on);
-  uint32_t system_ticks = get_systick()/10;
+  // Increment own clock: one tick per sensor sample (100 Hz -> 10 ms)
+  hnd->sample_count++;
+  uint32_t system_ticks = hnd->sample_count;
 
   // BPM calculation if finger is on
   if (is_finger_on == 1)
@@ -112,5 +109,24 @@ void calc_bpm(s_pulse_meter_handle_t* hnd)
     hnd->bpm = 0;               // Reset BPM
     hnd->ready_for_beat = 1;    // Ready for the next measurement
     hnd->last_beat_time = system_ticks; // Avoid huge delta_ticks when finger is placed back
+  }
+}
+
+
+void calc_bpm(s_pulse_meter_handle_t* hnd)
+{
+  if (hnd == NULL) return;
+
+  uint16_t ir_raw[IR_FIFO_DEPTH];
+  uint8_t is_finger_on[IR_FIFO_DEPTH];
+  uint8_t num_samples = 0;
+
+  // On I2C error keep the previous state (do not treat it as "finger removed")
+  if (read_ir_sensor(ir_raw, is_finger_on, IR_FIFO_DEPTH, &num_samples) != 0) return;
+
+  // Process every sample waiting in the FIFO, so none is lost if the task was delayed
+  for (uint8_t i = 0; i < num_samples; i++)
+  {
+    process_ir_sample(hnd, ir_raw[i], is_finger_on[i]);
   }
 }

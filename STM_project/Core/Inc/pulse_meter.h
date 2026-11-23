@@ -17,7 +17,8 @@ typedef struct {
 
   uint8_t ready_for_beat;
   uint8_t beat_cooldown;    // Idle time between heartbeats
-  uint32_t last_beat_time;  // Last heartbeat time
+  uint32_t last_beat_time;  // Last heartbeat time (in samples)
+  uint32_t sample_count;    // Own time base: number of processed samples (100 Hz -> 10 ms each)
   uint8_t bpm;              // Pulse in BPM
 }s_pulse_meter_handle_t;
 
