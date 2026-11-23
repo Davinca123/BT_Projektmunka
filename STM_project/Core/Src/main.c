@@ -28,6 +28,8 @@
 #include "ugui.h"
 #include "step_counter.h"
 #include "accelerometer_driver.h"
+#include "ir_sensor.h"
+#include "pulse_meter.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -78,6 +80,7 @@ const osThreadAttr_t DisplayTask_attributes = {
 
 volatile uint8_t step_counting_flag = 0;
 uint32_t step_count_disp = 0; //@todo refactor
+uint8_t bpm_disp = 0; //@todo refactor
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -111,7 +114,13 @@ int port_i2c_receive(uint16_t dev_addr, uint16_t mem_addr, uint16_t mem_addr_siz
 
 void port_time_delay(uint32_t delay_ms)
 {
-  HAL_Delay(delay_ms);
+//  HAL_Delay(delay_ms);
+  osDelay(delay_ms);
+}
+
+uint32_t get_systick(void)
+{
+  return HAL_GetTick();
 }
 
 
@@ -456,6 +465,10 @@ void StartMeasureManagerTask(void *argument)
   s_step_counter_handle_t step_hnd;
   init_step_counter(&step_hnd);
   init_accelerometer();
+
+  s_pulse_meter_handle_t pulse_hnd;
+  init_pulse_meter(&pulse_hnd);
+  init_ir_sensor();
   /* Infinite loop */
   for(;;)
   {
@@ -464,6 +477,10 @@ void StartMeasureManagerTask(void *argument)
       step_counting_flag = 0;
       calc_step(&step_hnd);
       step_count_disp = get_step_count(&step_hnd);
+
+
+      calc_bpm(&pulse_hnd);
+      bpm_disp = get_bpm(&pulse_hnd);
     }
 
     // Reset step_count if the button is pressed
@@ -494,7 +511,8 @@ void StartDisplayTask(void *argument)
   /* Infinite loop */
   for(;;)
   {
-    render_step_counter_frame(step_count_disp);
+//    render_step_counter_frame(step_count_disp);
+    render_step_counter_frame(bpm_disp);
     osDelay(100);
   }
   /* USER CODE END StartDisplayTask */
