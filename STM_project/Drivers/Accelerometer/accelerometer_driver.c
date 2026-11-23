@@ -13,7 +13,7 @@
 void init_accelerometer(void)
 {
   // CTRL1 settings: 25 Hz constant sampling in High Performance mode
-  uint8_t ctrl1_set_value = (ODR_25_HZ << 4) | (MODE_HIGH_PERF << 2)
+  uint8_t ctrl1_set_value = (ODR_100_HZ << 4) | (MODE_HIGH_PERF << 2)
       | LP_MODE_XX;
   port_i2c_transmit(DEV_ADDR, CTRL1_ADDR, 1, &ctrl1_set_value, 1, 100);
 
