@@ -26,6 +26,8 @@
 #include "display_driver.h"
 #include "display_module.h"
 #include "ugui.h"
+#include "step_counter.h"
+#include "accelerometer_driver.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -35,7 +37,8 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-
+#define BTN_RESET_PORT  GPIOC
+#define BTN_RESET_PIN   GPIO_PIN_0
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -73,6 +76,8 @@ const osThreadAttr_t DisplayTask_attributes = {
 };
 /* USER CODE BEGIN PV */
 
+volatile uint8_t step_counting_flag = 0;
+uint32_t step_count_disp = 0; //@todo refactor
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -94,15 +99,21 @@ void StartDisplayTask(void *argument);
 /*******************************************************************************
  ********************** PLATFORM SPECIFIC PORT FUNCTIONS ***********************
  ******************************************************************************/
-int port_i2c_transmit(uint16_t addr, uint8_t* pdata, uint16_t size, uint32_t timeout)
+int port_i2c_transmit(uint16_t dev_addr, uint16_t mem_addr, uint16_t mem_addr_size, uint8_t* pdata, uint16_t size, uint32_t timeout)
 {
-  return HAL_I2C_Master_Transmit(&hi2c1, addr, pdata, size, timeout);
+  return HAL_I2C_Mem_Write(&hi2c1, dev_addr, mem_addr, mem_addr_size, pdata, size, timeout);
+}
+
+int port_i2c_receive(uint16_t dev_addr, uint16_t mem_addr, uint16_t mem_addr_size, uint8_t* pdata, uint16_t size, uint32_t timeout)
+{
+  return HAL_I2C_Mem_Read(&hi2c1, dev_addr, mem_addr, mem_addr_size, pdata, size, timeout);
 }
 
 void port_time_delay(uint32_t delay_ms)
 {
   HAL_Delay(delay_ms);
 }
+
 
 /* USER CODE END 0 */
 
@@ -139,7 +150,7 @@ int main(void)
   MX_TIM6_Init();
   MX_I2C1_Init();
   /* USER CODE BEGIN 2 */
-
+  HAL_TIM_Base_Start_IT(&htim6);
   /* USER CODE END 2 */
 
   /* Init scheduler */
@@ -310,10 +321,10 @@ static void MX_TIM6_Init(void)
 
   /* USER CODE END TIM6_Init 1 */
   htim6.Instance = TIM6;
-  htim6.Init.Prescaler = 0;
+  htim6.Init.Prescaler = 7999;
   htim6.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim6.Init.Period = 65535;
-  htim6.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  htim6.Init.Period = 99;
+  htim6.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_ENABLE;
   if (HAL_TIM_Base_Init(&htim6) != HAL_OK)
   {
     Error_Handler();
@@ -392,6 +403,12 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(B1_GPIO_Port, &GPIO_InitStruct);
 
+  /*Configure GPIO pin : PC0 */
+  GPIO_InitStruct.Pin = GPIO_PIN_0;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = GPIO_PULLUP;
+  HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
+
   /*Configure GPIO pin : LD4_Pin */
   GPIO_InitStruct.Pin = LD4_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
@@ -436,10 +453,26 @@ void StartDefaultTask(void *argument)
 void StartMeasureManagerTask(void *argument)
 {
   /* USER CODE BEGIN StartMeasureManagerTask */
+  s_step_counter_handle_t step_hnd;
+  init_step_counter(&step_hnd);
+  init_accelerometer();
   /* Infinite loop */
   for(;;)
   {
-    osDelay(1);
+    if (step_counting_flag)
+    {
+      step_counting_flag = 0;
+      calc_step(&step_hnd);
+      step_count_disp = get_step_count(&step_hnd);
+    }
+
+    // Reset step_count if the button is pressed
+    //@todo refactor
+    if (HAL_GPIO_ReadPin(BTN_RESET_PORT, BTN_RESET_PIN) == GPIO_PIN_RESET)
+    {
+      set_step_count(&step_hnd, 0);
+    }
+    osDelay(10);
   }
   /* USER CODE END StartMeasureManagerTask */
 }
@@ -457,12 +490,11 @@ void StartDisplayTask(void *argument)
 
   gme12864_init();
   display_graphics_init();
-  uint32_t step_counter = 34567;
+//  uint32_t step_counter = 34567;
   /* Infinite loop */
   for(;;)
   {
-    render_step_counter_frame(step_counter);
-    ++step_counter;
+    render_step_counter_frame(step_count_disp);
     osDelay(100);
   }
   /* USER CODE END StartDisplayTask */
@@ -479,7 +511,10 @@ void StartDisplayTask(void *argument)
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 {
   /* USER CODE BEGIN Callback 0 */
-
+  if (htim->Instance == TIM6) {
+    //@todo refactor
+    step_counting_flag = 1;
+  }
   /* USER CODE END Callback 0 */
   if (htim->Instance == TIM2)
   {
