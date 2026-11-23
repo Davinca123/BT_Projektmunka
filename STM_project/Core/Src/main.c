@@ -39,15 +39,11 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define BTN_RESET_PORT  GPIOC
-#define BTN_RESET_PIN   GPIO_PIN_0
-#define BTN_SWITCH_PORT GPIOC
-#define BTN_SWITCH_PIN  GPIO_PIN_1
-
-#define FLAG_MEASURE_TICK  0x0001U
+#define FLAG_MEASURE_TICK  0x0001U  // TIM6 -> MeasureManagerT: next 10 ms sample
+#define FLAG_STEP_RESET    0x0002U  // Reset button (EXTI0) -> MeasureManagerT
 
 #define DISPLAY_REFRESH_MS    1000u  // Redraw period without new messages (clock)
-#define BTN_LOCKOUT_TICKS     20u    // 20 * 10 ms = 200 ms debounce after a press
+#define BTN_DEBOUNCE_MS       200u   // Ignore further edges of a button for 200 ms after a press
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -441,9 +437,9 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(B1_GPIO_Port, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : PC0 PC1 */
-  GPIO_InitStruct.Pin = GPIO_PIN_0|GPIO_PIN_1;
-  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  /*Configure GPIO pins : Reset_btn_Pin Disp_Switch_btn_Pin */
+  GPIO_InitStruct.Pin = Reset_btn_Pin|Disp_Switch_btn_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_IT_FALLING;
   GPIO_InitStruct.Pull = GPIO_PULLUP;
   HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
 
@@ -454,12 +450,51 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(LD4_GPIO_Port, &GPIO_InitStruct);
 
+  /* EXTI interrupt init*/
+  HAL_NVIC_SetPriority(EXTI0_IRQn, 5, 0);
+  HAL_NVIC_EnableIRQ(EXTI0_IRQn);
+
+  HAL_NVIC_SetPriority(EXTI1_IRQn, 5, 0);
+  HAL_NVIC_EnableIRQ(EXTI1_IRQn);
+
   /* USER CODE BEGIN MX_GPIO_Init_2 */
 
   /* USER CODE END MX_GPIO_Init_2 */
 }
 
 /* USER CODE BEGIN 4 */
+/**
+  * @brief  EXTI callback for the buttons (falling edge = press, pull-up active)
+  * @note   Runs in interrupt context: only non-blocking RTOS calls (timeout 0)
+  * @param  GPIO_Pin: pin that triggered the interrupt
+  */
+void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
+{
+  static uint32_t last_reset_press = 0;   // Separate debounce time per button
+  static uint32_t last_switch_press = 0;
+  uint32_t now = HAL_GetTick();
+
+  if (GPIO_Pin == Reset_btn_Pin)
+  {
+    // Debounce: ignore bounces / repeated edges, and accept only if the pin is really low
+    if (((now - last_reset_press) < BTN_DEBOUNCE_MS)
+        || (HAL_GPIO_ReadPin(Reset_btn_GPIO_Port, Reset_btn_Pin) != GPIO_PIN_RESET)) return;
+    last_reset_press = now;
+
+    // step_hnd belongs to MeasureManagerT -> let the task do the reset
+    osThreadFlagsSet(MeasureManagerTHandle, FLAG_STEP_RESET);
+  }
+  else if (GPIO_Pin == Disp_Switch_btn_Pin)
+  {
+    if (((now - last_switch_press) < BTN_DEBOUNCE_MS)
+        || (HAL_GPIO_ReadPin(Disp_Switch_btn_GPIO_Port, Disp_Switch_btn_Pin) != GPIO_PIN_RESET)) return;
+    last_switch_press = now;
+
+    // Only the display cares about the mode -> send directly to its queue
+    s_disp_msg_t msg = { DISP_MSG_MODE_NEXT, 0 };
+    osMessageQueuePut(displayQueueHandle, &msg, 0, 0);
+  }
+}
 
 /* USER CODE END 4 */
 
@@ -501,23 +536,25 @@ void StartMeasureManagerTask(void *argument)
 
   uint32_t last_steps = UINT32_MAX;  // Force sending the first values to the display
   uint32_t last_bpm = UINT32_MAX;
-  GPIO_PinState btn_switch_prev = GPIO_PIN_SET;
-  uint8_t btn_switch_lockout = 0;
   s_disp_msg_t msg;
   /* Infinite loop */
   for(;;)
   {
-    // Sleep until TIM6 signals the next 10 ms tick (flag is cleared automatically)
-    osThreadFlagsWait(FLAG_MEASURE_TICK, osFlagsWaitAny, osWaitForever);
+    // Sleep until TIM6 signals the next 10 ms tick or the reset button was pressed
+    // (the received flags are cleared automatically)
+    uint32_t flags = osThreadFlagsWait(FLAG_MEASURE_TICK | FLAG_STEP_RESET, osFlagsWaitAny, osWaitForever);
+    if (flags & osFlagsError) continue;
 
-    calc_step(&step_hnd);
-    calc_bpm(&pulse_hnd);
-
-    // Reset step_count if the button is pressed
-    //@todo refactor
-    if (HAL_GPIO_ReadPin(BTN_RESET_PORT, BTN_RESET_PIN) == GPIO_PIN_RESET)
+    // Reset step_count if the reset button was pressed
+    if (flags & FLAG_STEP_RESET)
     {
       set_step_count(&step_hnd, 0);
+    }
+
+    if (flags & FLAG_MEASURE_TICK)
+    {
+      calc_step(&step_hnd);
+      calc_bpm(&pulse_hnd);
     }
 
     // Send values to the display only if they changed (timeout 0: never block the measurement)
@@ -536,22 +573,6 @@ void StartMeasureManagerTask(void *argument)
       msg.value = bpm;
       if (osMessageQueuePut(displayQueueHandle, &msg, 0, 0) == osOK) last_bpm = bpm;
     }
-
-    // Display mode switch: react on the press edge only, then ignore the button for 200 ms (debounce)
-    //@todo move to EXTI when the dedicated button is wired
-    GPIO_PinState btn_switch_now = HAL_GPIO_ReadPin(BTN_SWITCH_PORT, BTN_SWITCH_PIN);
-    if (btn_switch_lockout > 0)
-    {
-      btn_switch_lockout--;
-    }
-    else if ((btn_switch_prev == GPIO_PIN_SET) && (btn_switch_now == GPIO_PIN_RESET))
-    {
-      msg.type = DISP_MSG_MODE_NEXT;
-      msg.value = 0;
-      osMessageQueuePut(displayQueueHandle, &msg, 0, 0);
-      btn_switch_lockout = BTN_LOCKOUT_TICKS;
-    }
-    btn_switch_prev = btn_switch_now;
   }
   /* USER CODE END StartMeasureManagerTask */
 }
