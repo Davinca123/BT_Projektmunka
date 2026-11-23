@@ -499,12 +499,12 @@ void StartMeasureManagerTask(void *argument)
       bpm_disp = get_bpm(&pulse_hnd);
     }
 
-    // Reset step_count if the button is pressed
-    //@todo refactor
-    if (HAL_GPIO_ReadPin(BTN_RESET_PORT, BTN_RESET_PIN) == GPIO_PIN_RESET)
-    {
-      set_step_count(&step_hnd, 0);
-    }
+//    // Reset step_count if the button is pressed
+//    //@todo refactor
+//    if (HAL_GPIO_ReadPin(BTN_RESET_PORT, BTN_RESET_PIN) == GPIO_PIN_RESET)
+//    {
+//      set_step_count(&step_hnd, 0);
+//    }
     osDelay(10);
   }
   /* USER CODE END StartMeasureManagerTask */
@@ -523,12 +523,31 @@ void StartDisplayTask(void *argument)
 
   gme12864_init();
   display_graphics_init();
-//  uint32_t step_counter = 34567;
+  e_disp_mode_t display_mode = DISP_MODE_CLOCK;
   /* Infinite loop */
   for(;;)
   {
-//    render_step_counter_frame(step_count_disp);
-    render_step_counter_frame(bpm_disp);
+    switch (display_mode)
+    {
+      case DISP_MODE_CLOCK:
+        render_clock_frame();
+        break;
+
+      case DISP_MODE_STEP_COUNTER:
+        render_step_counter_frame(step_count_disp);
+        break;
+
+      case DISP_MODE_PULSE_METER:
+        render_pulse_meter_frame(bpm_disp);
+        break;
+
+      default:
+        break;
+    }
+    if (HAL_GPIO_ReadPin(BTN_RESET_PORT, BTN_RESET_PIN) == GPIO_PIN_RESET)
+    {
+      display_mode = (display_mode + 1) % DISP_MODE_NUMBER;
+    }
     osDelay(100);
   }
   /* USER CODE END StartDisplayTask */
