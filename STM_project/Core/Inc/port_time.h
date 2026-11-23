@@ -9,5 +9,6 @@
 #define INC_PORT_TIME_H_
 
 extern void port_time_delay(uint32_t delay_ms);
+extern uint32_t get_systick(void);
 
 #endif /* INC_PORT_TIME_H_ */

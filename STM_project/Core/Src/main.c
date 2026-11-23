@@ -28,6 +28,8 @@
 #include "ugui.h"
 #include "step_counter.h"
 #include "accelerometer_driver.h"
+#include "ir_sensor.h"
+#include "pulse_meter.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -39,6 +41,13 @@
 /* USER CODE BEGIN PD */
 #define BTN_RESET_PORT  GPIOC
 #define BTN_RESET_PIN   GPIO_PIN_0
+#define BTN_SWITCH_PORT GPIOC
+#define BTN_SWITCH_PIN  GPIO_PIN_1
+
+#define FLAG_MEASURE_TICK  0x0001U
+
+#define DISPLAY_REFRESH_MS    1000u  // Redraw period without new messages (clock)
+#define BTN_LOCKOUT_TICKS     20u    // 20 * 10 ms = 200 ms debounce after a press
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -74,10 +83,18 @@ const osThreadAttr_t DisplayTask_attributes = {
   .stack_size = 256 * 4,
   .priority = (osPriority_t) osPriorityBelowNormal,
 };
+/* Definitions for displayQueue */
+osMessageQueueId_t displayQueueHandle;
+const osMessageQueueAttr_t displayQueue_attributes = {
+  .name = "displayQueue"
+};
+/* Definitions for mutexI2c */
+osMutexId_t mutexI2cHandle;
+const osMutexAttr_t mutexI2c_attributes = {
+  .name = "mutexI2c"
+};
 /* USER CODE BEGIN PV */
 
-volatile uint8_t step_counting_flag = 0;
-uint32_t step_count_disp = 0; //@todo refactor
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -101,17 +118,31 @@ void StartDisplayTask(void *argument);
  ******************************************************************************/
 int port_i2c_transmit(uint16_t dev_addr, uint16_t mem_addr, uint16_t mem_addr_size, uint8_t* pdata, uint16_t size, uint32_t timeout)
 {
-  return HAL_I2C_Mem_Write(&hi2c1, dev_addr, mem_addr, mem_addr_size, pdata, size, timeout);
+  // I2C1 is shared between tasks (display, accelerometer, IR sensor) -> serialize access
+  if (osMutexAcquire(mutexI2cHandle, osWaitForever) != osOK) return HAL_BUSY;
+  int ret = HAL_I2C_Mem_Write(&hi2c1, dev_addr, mem_addr, mem_addr_size, pdata, size, timeout);
+  osMutexRelease(mutexI2cHandle);
+  return ret;
 }
 
 int port_i2c_receive(uint16_t dev_addr, uint16_t mem_addr, uint16_t mem_addr_size, uint8_t* pdata, uint16_t size, uint32_t timeout)
 {
-  return HAL_I2C_Mem_Read(&hi2c1, dev_addr, mem_addr, mem_addr_size, pdata, size, timeout);
+  // I2C1 is shared between tasks (display, accelerometer, IR sensor) -> serialize access
+  if (osMutexAcquire(mutexI2cHandle, osWaitForever) != osOK) return HAL_BUSY;
+  int ret = HAL_I2C_Mem_Read(&hi2c1, dev_addr, mem_addr, mem_addr_size, pdata, size, timeout);
+  osMutexRelease(mutexI2cHandle);
+  return ret;
 }
 
 void port_time_delay(uint32_t delay_ms)
 {
-  HAL_Delay(delay_ms);
+//  HAL_Delay(delay_ms);
+  osDelay(delay_ms);
+}
+
+uint32_t get_systick(void)
+{
+  return HAL_GetTick();
 }
 
 
@@ -155,6 +186,9 @@ int main(void)
 
   /* Init scheduler */
   osKernelInitialize();
+  /* Create the mutex(es) */
+  /* creation of mutexI2c */
+  mutexI2cHandle = osMutexNew(&mutexI2c_attributes);
 
   /* USER CODE BEGIN RTOS_MUTEX */
   /* add mutexes, ... */
@@ -168,8 +202,12 @@ int main(void)
   /* start timers, add new ones, ... */
   /* USER CODE END RTOS_TIMERS */
 
+  /* Create the queue(s) */
+  /* creation of displayQueue */
+  displayQueueHandle = osMessageQueueNew (8, sizeof(s_disp_msg_t), &displayQueue_attributes);
+
   /* USER CODE BEGIN RTOS_QUEUES */
-  /* add queues, ... */
+
   /* USER CODE END RTOS_QUEUES */
 
   /* Create the thread(s) */
@@ -271,7 +309,7 @@ static void MX_I2C1_Init(void)
 
   /* USER CODE END I2C1_Init 1 */
   hi2c1.Instance = I2C1;
-  hi2c1.Init.Timing = 0x10D19CE4;
+  hi2c1.Init.Timing = 0x00F12981;
   hi2c1.Init.OwnAddress1 = 0;
   hi2c1.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
   hi2c1.Init.DualAddressMode = I2C_DUALADDRESS_DISABLE;
@@ -403,8 +441,8 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(B1_GPIO_Port, &GPIO_InitStruct);
 
-  /*Configure GPIO pin : PC0 */
-  GPIO_InitStruct.Pin = GPIO_PIN_0;
+  /*Configure GPIO pins : PC0 PC1 */
+  GPIO_InitStruct.Pin = GPIO_PIN_0|GPIO_PIN_1;
   GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
   GPIO_InitStruct.Pull = GPIO_PULLUP;
   HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
@@ -456,15 +494,24 @@ void StartMeasureManagerTask(void *argument)
   s_step_counter_handle_t step_hnd;
   init_step_counter(&step_hnd);
   init_accelerometer();
+
+  s_pulse_meter_handle_t pulse_hnd;
+  init_pulse_meter(&pulse_hnd);
+  init_ir_sensor();
+
+  uint32_t last_steps = UINT32_MAX;  // Force sending the first values to the display
+  uint32_t last_bpm = UINT32_MAX;
+  GPIO_PinState btn_switch_prev = GPIO_PIN_SET;
+  uint8_t btn_switch_lockout = 0;
+  s_disp_msg_t msg;
   /* Infinite loop */
   for(;;)
   {
-    if (step_counting_flag)
-    {
-      step_counting_flag = 0;
-      calc_step(&step_hnd);
-      step_count_disp = get_step_count(&step_hnd);
-    }
+    // Sleep until TIM6 signals the next 10 ms tick (flag is cleared automatically)
+    osThreadFlagsWait(FLAG_MEASURE_TICK, osFlagsWaitAny, osWaitForever);
+
+    calc_step(&step_hnd);
+    calc_bpm(&pulse_hnd);
 
     // Reset step_count if the button is pressed
     //@todo refactor
@@ -472,7 +519,39 @@ void StartMeasureManagerTask(void *argument)
     {
       set_step_count(&step_hnd, 0);
     }
-    osDelay(10);
+
+    // Send values to the display only if they changed (timeout 0: never block the measurement)
+    uint32_t steps = get_step_count(&step_hnd);
+    if (steps != last_steps)
+    {
+      msg.type = DISP_MSG_STEPS;
+      msg.value = steps;
+      if (osMessageQueuePut(displayQueueHandle, &msg, 0, 0) == osOK) last_steps = steps; // retry next tick if full
+    }
+
+    uint32_t bpm = get_bpm(&pulse_hnd);
+    if (bpm != last_bpm)
+    {
+      msg.type = DISP_MSG_BPM;
+      msg.value = bpm;
+      if (osMessageQueuePut(displayQueueHandle, &msg, 0, 0) == osOK) last_bpm = bpm;
+    }
+
+    // Display mode switch: react on the press edge only, then ignore the button for 200 ms (debounce)
+    //@todo move to EXTI when the dedicated button is wired
+    GPIO_PinState btn_switch_now = HAL_GPIO_ReadPin(BTN_SWITCH_PORT, BTN_SWITCH_PIN);
+    if (btn_switch_lockout > 0)
+    {
+      btn_switch_lockout--;
+    }
+    else if ((btn_switch_prev == GPIO_PIN_SET) && (btn_switch_now == GPIO_PIN_RESET))
+    {
+      msg.type = DISP_MSG_MODE_NEXT;
+      msg.value = 0;
+      osMessageQueuePut(displayQueueHandle, &msg, 0, 0);
+      btn_switch_lockout = BTN_LOCKOUT_TICKS;
+    }
+    btn_switch_prev = btn_switch_now;
   }
   /* USER CODE END StartMeasureManagerTask */
 }
@@ -490,12 +569,55 @@ void StartDisplayTask(void *argument)
 
   gme12864_init();
   display_graphics_init();
-//  uint32_t step_counter = 34567;
+  e_disp_mode_t display_mode = DISP_MODE_PULSE_METER;
+  uint32_t step_count = 0;  // Latest values received from the measure task
+  uint8_t bpm = 0;
+  s_disp_msg_t msg;
   /* Infinite loop */
   for(;;)
   {
-    render_step_counter_frame(step_count_disp);
-    osDelay(100);
+    switch (display_mode)
+    {
+      case DISP_MODE_CLOCK:
+        render_clock_frame();
+        break;
+
+      case DISP_MODE_STEP_COUNTER:
+        render_step_counter_frame(step_count);
+        break;
+
+      case DISP_MODE_PULSE_METER:
+        render_pulse_meter_frame(bpm);
+        break;
+
+      default:
+        break;
+    }
+
+    // Sleep until a message arrives (or the refresh period elapses, e.g. for the clock),
+    // then process every pending message before the next redraw
+    uint32_t timeout = DISPLAY_REFRESH_MS;
+    while (osMessageQueueGet(displayQueueHandle, &msg, NULL, timeout) == osOK)
+    {
+      switch (msg.type)
+      {
+        case DISP_MSG_STEPS:
+          step_count = msg.value;
+          break;
+
+        case DISP_MSG_BPM:
+          bpm = (uint8_t) msg.value;
+          break;
+
+        case DISP_MSG_MODE_NEXT:
+          display_mode = (display_mode + 1) % DISP_MODE_NUMBER;
+          break;
+
+        default:
+          break;
+      }
+      timeout = 0; // Only drain the rest of the queue, do not wait again
+    }
   }
   /* USER CODE END StartDisplayTask */
 }
@@ -512,8 +634,7 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 {
   /* USER CODE BEGIN Callback 0 */
   if (htim->Instance == TIM6) {
-    //@todo refactor
-    step_counting_flag = 1;
+    osThreadFlagsSet(MeasureManagerTHandle, FLAG_MEASURE_TICK);
   }
   /* USER CODE END Callback 0 */
   if (htim->Instance == TIM2)

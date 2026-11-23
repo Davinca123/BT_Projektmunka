@@ -41,7 +41,15 @@ void display_graphics_init(void) {
 
 void render_clock_frame(void)
 {
+  gme12864_clear();
 
+  UG_DrawFrame(0, 0, 127, 63, 1);
+
+  char buf[32];
+  snprintf(buf, sizeof(buf), "11:22:33");
+  UG_PutString(4, 25, buf);
+
+  gme12864_update();
 }
 
 void render_step_counter_frame(uint32_t step_count)
@@ -52,6 +60,19 @@ void render_step_counter_frame(uint32_t step_count)
 
   char buf[32];
   snprintf(buf, sizeof(buf), "Step: %u", (unsigned int)step_count);
+  UG_PutString(4, 25, buf);
+
+  gme12864_update();
+}
+
+void render_pulse_meter_frame(uint8_t bpm)
+{
+  gme12864_clear();
+
+  UG_DrawFrame(0, 0, 127, 63, 1);
+
+  char buf[32];
+  snprintf(buf, sizeof(buf), "Pulse: %u", (unsigned int)bpm);
   UG_PutString(4, 25, buf);
 
   gme12864_update();
